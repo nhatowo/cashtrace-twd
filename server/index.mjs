@@ -80,14 +80,14 @@ function getAuthUser(req, db) {
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
   if (!token) {
     // Default shared workspace user if not logged in so sync works out-of-the-box!
-    return { id: 'default_shared_wallet', email: 'Ví chung trên Server 180.93.118.185' };
+    return { id: 'default_shared_wallet', email: 'Ví chung trên Server 18.142.115.74' };
   }
   const userId = db.sessions[token];
   if (!userId) {
-    return { id: 'default_shared_wallet', email: 'Ví chung trên Server 180.93.118.185' };
+    return { id: 'default_shared_wallet', email: 'Ví chung trên Server 18.142.115.74' };
   }
   const user = db.users.find((u) => u.id === userId);
-  return user || { id: 'default_shared_wallet', email: 'Ví chung trên Server 180.93.118.185' };
+  return user || { id: 'default_shared_wallet', email: 'Ví chung trên Server 18.142.115.74' };
 }
 
 const MIME_TYPES = {
@@ -120,7 +120,7 @@ const server = http.createServer(async (req, res) => {
   try {
     // --- API ROUTES ---
     if (pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, server: 'CashTrace Ubuntu Server 180.93.118.185' });
+      return sendJson(res, 200, { ok: true, server: 'CashTrace Ubuntu Server 18.142.115.74' });
     }
 
     if (pathname === '/api/auth/register' && req.method === 'POST') {

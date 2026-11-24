@@ -1,6 +1,6 @@
 import { Banknote, BanknoteStatus, Denomination } from '@/types/banknote';
 
-export const DEFAULT_SERVER_URL = 'http://180.93.118.185';
+export const DEFAULT_SERVER_URL = 'http://18.142.115.74';
 const SERVER_URL_KEY = 'cashtrace_server_url';
 const SERVER_TOKEN_KEY = 'cashtrace_server_token';
 const SERVER_EMAIL_KEY = 'cashtrace_server_email';
@@ -9,9 +9,9 @@ export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const custom = window.localStorage.getItem(SERVER_URL_KEY)?.trim();
     if (custom) return custom.replace(/\/+$/, '');
-    // If hosted directly on the Ubuntu server via browser, use same-origin relative path
+    // If hosted directly on the AWS server via browser, use same-origin relative path
     if (
-      window.location.hostname === '180.93.118.185' ||
+      window.location.hostname === '18.142.115.74' ||
       (window.location.protocol.startsWith('http') &&
         window.location.hostname !== 'localhost')
     ) {
@@ -68,7 +68,7 @@ export async function serverFetchBanknotes(): Promise<{
   const data = await res.json();
   return {
     banknotes: (data.banknotes || []) as Banknote[],
-    userEmail: data.user?.email || 'Ví chung (180.93.118.185)',
+    userEmail: data.user?.email || 'Ví chung (18.142.115.74)',
   };
 }
 

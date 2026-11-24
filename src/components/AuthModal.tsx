@@ -70,7 +70,7 @@ export default function AuthModal({
     if (!supabaseUrl.trim().startsWith('http') || !supabaseKey.trim()) {
       setMessage({
         type: 'error',
-        text: 'Vui lòng nhập đầy đủ Supabase Project URL và Anon Key hợp lệ (hoặc để trống để dùng Ubuntu Server 180.93.118.185).',
+        text: 'Vui lòng nhập đầy đủ Supabase Project URL và Anon Key hợp lệ (hoặc để trống để dùng Ubuntu Server 18.142.115.74).',
       });
       return;
     }
@@ -106,7 +106,7 @@ export default function AuthModal({
           if (error) throw error;
         }
       } else {
-        // Authenticate directly against the Ubuntu server 180.93.118.185
+        // Authenticate directly against the Ubuntu server 18.142.115.74
         await serverLoginOrRegister(
           tab === 'login' ? 'login' : 'register',
           email.trim(),
@@ -178,7 +178,7 @@ export default function AuthModal({
             <strong className="font-mono">
               {currentConfig.source !== 'unconfigured'
                 ? 'Supabase Cloud'
-                : 'Ubuntu 180.93.118.185'}
+                : 'Ubuntu 18.142.115.74'}
             </strong>
           </span>
         </div>
@@ -273,13 +273,13 @@ export default function AuthModal({
             <form onSubmit={handleSaveConfig} className="space-y-3.5">
               <p className="text-xs text-slate-400 leading-relaxed">
                 Mặc định ứng dụng tự động đồng bộ qua máy chủ Ubuntu{' '}
-                <code className="text-emerald-300">180.93.118.185</code>. Nếu
+                <code className="text-emerald-300">18.142.115.74</code>. Nếu
                 muốn chuyển sang Supabase riêng, hãy nhập URL &amp; Anon Key bên
                 dưới:
               </p>
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Supabase Project URL (Để trống để dùng Server 180.93.118.185)
+                  Supabase Project URL (Để trống để dùng Server 18.142.115.74)
                 </label>
                 <input
                   type="url"
@@ -314,7 +314,7 @@ export default function AuthModal({
               <p className="text-xs text-slate-400">
                 Hiện đang dùng{' '}
                 <strong className="text-emerald-300">
-                  Ví chung tự động trên Server 180.93.118.185
+                  Ví chung tự động trên Server 18.142.115.74
                 </strong>
                 . Bạn cũng có thể đăng nhập tài khoản riêng bên dưới:
               </p>
