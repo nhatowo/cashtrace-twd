@@ -10,11 +10,12 @@ import {
   AlertCircle,
   Zap,
   CheckCircle2,
+  ZoomIn,
+  Flashlight,
 } from 'lucide-react';
 import {
   recognizeSerialFromCanvas,
   computeCanvasSharpness,
-  prewarmOcrWorker,
   OcrScanResult,
 } from '@/lib/ocr';
 
@@ -30,6 +31,7 @@ export default function CameraScannerModal({
   onScanComplete,
 }: CameraScannerModalProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const reticleRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -38,18 +40,19 @@ export default function CameraScannerModal({
   const [isProcessing, setIsProcessing] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
 
-  // Live Auto-Scan state
+  // Live Auto-Scan & Camera Enhancement Controls
   const [autoScanEnabled, setAutoScanEnabled] = useState(true);
+  const [zoomLevel, setZoomLevel] = useState<1 | 1.6>(1.6);
+  const [torchOn, setTorchOn] = useState(false);
   const [sharpnessScore, setSharpnessScore] = useState(0);
   const [liveStatusText, setLiveStatusText] = useState(
-    'Đưa dãy số seri vào khung — Tự động nhận diện khi đủ nét'
+    'Đưa dãy số seri vào khung xanh — Tự động nhận ngay khi thấy'
   );
   const [liveDetectedCandidate, setLiveDetectedCandidate] = useState<
     string | null
   >(null);
 
   const isScanningFrameRef = useRef(false);
-  const lastCandidateRef = useRef<string>('');
   const completedRef = useRef(false);
 
   const stopCamera = useCallback(() => {
@@ -58,13 +61,13 @@ export default function CameraScannerModal({
       streamRef.current = null;
     }
     setCameraReady(false);
+    setTorchOn(false);
   }, []);
 
   const startCamera = useCallback(async () => {
     setCameraError(null);
     setCameraReady(false);
     completedRef.current = false;
-    lastCandidateRef.current = '';
     setLiveDetectedCandidate(null);
 
     if (
@@ -80,7 +83,6 @@ export default function CameraScannerModal({
 
     try {
       stopCamera();
-      prewarmOcrWorker();
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -93,7 +95,6 @@ export default function CameraScannerModal({
 
       streamRef.current = stream;
 
-      // Attempt to enable continuous autofocus on mobile camera track if supported
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack && typeof videoTrack.applyConstraints === 'function') {
         try {
@@ -113,10 +114,26 @@ export default function CameraScannerModal({
       }
     } catch {
       setCameraError(
-        'Không thể truy cập camera. Vui lòng cấp quyền camera trên Safari/trình duyệt hoặc nhấn "Chụp / Tải ảnh" bên dưới.'
+        'Không thể truy cập camera. Vui lòng cấp quyền camera trên Safari/trình duyệt hoặc nhấn "Tải ảnh" bên dưới.'
       );
     }
   }, [stopCamera]);
+
+  // Toggle hardware flashlight/torch if supported on iPhone/Android
+  const toggleTorch = async () => {
+    const track = streamRef.current?.getVideoTracks()?.[0];
+    if (!track || typeof track.applyConstraints !== 'function') return;
+    const next = !torchOn;
+    try {
+      await track.applyConstraints({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        advanced: [{ torch: next } as any],
+      });
+      setTorchOn(next);
+    } catch {
+      // Torch not supported on this device/browser
+    }
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -132,36 +149,64 @@ export default function CameraScannerModal({
   }, [isOpen, startCamera, stopCamera]);
 
   /**
-   * Crops the tight horizontal serial number strip from the current video frame.
-   * Height is 12% of video height so background characters above/below the serial line are excluded.
+   * Maps the exact on-screen green reticle box (`reticleRef.getBoundingClientRect()`)
+   * to the underlying `<video>` pixel coordinates, taking CSS `object-cover` and `zoomLevel`
+   * into account so what the user sees inside the green box is 100% what gets cropped!
    */
-  const cropSerialStripFromVideo = useCallback((): HTMLCanvasElement | null => {
-    const video = videoRef.current;
-    if (!video || !video.videoWidth || !video.videoHeight) return null;
+  const cropExactReticleFromVideo =
+    useCallback((): HTMLCanvasElement | null => {
+      const video = videoRef.current;
+      const reticle = reticleRef.current;
+      if (!video || !video.videoWidth || !video.videoHeight) return null;
 
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
 
-    const cropW = Math.floor(vw * 0.72);
-    const cropH = Math.floor(vh * 0.12);
-    const cropX = Math.floor((vw - cropW) / 2);
-    const cropY = Math.floor((vh - cropH) / 2);
+      const vRect = video.getBoundingClientRect();
+      const rRect = reticle?.getBoundingClientRect();
 
-    const canvas = document.createElement('canvas');
-    // Normalize width to max 560px for ultra-fast real-time OCR
-    const outW = Math.min(560, cropW);
-    const outH = Math.max(48, Math.round((cropH / cropW) * outW));
-    canvas.width = outW;
-    canvas.height = outH;
+      let cropX = Math.floor(vw * 0.14);
+      let cropY = Math.floor(vh * 0.44);
+      let cropW = Math.floor(vw * 0.72);
+      let cropH = Math.floor(vh * 0.12);
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
+      if (vRect.width > 0 && vRect.height > 0 && rRect && rRect.width > 0) {
+        // Compute object-cover scale & offset
+        const baseScale = Math.max(vRect.width / vw, vRect.height / vh);
+        const effectiveScale = baseScale * zoomLevel;
 
-    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
-    return canvas;
-  }, []);
+        const displayedW = vw * effectiveScale;
+        const displayedH = vh * effectiveScale;
 
-  // Hands-free Live Auto-Scan Loop when frame is sharp enough
+        const offsetX = (vRect.width - displayedW) / 2;
+        const offsetY = (vRect.height - displayedH) / 2;
+
+        const relLeft = rRect.left - vRect.left - offsetX;
+        const relTop = rRect.top - vRect.top - offsetY;
+
+        cropX = Math.max(0, Math.floor(relLeft / effectiveScale));
+        cropY = Math.max(0, Math.floor(relTop / effectiveScale));
+        cropW = Math.min(vw - cropX, Math.floor(rRect.width / effectiveScale));
+        cropH = Math.min(vh - cropY, Math.floor(rRect.height / effectiveScale));
+      }
+
+      if (cropW < 32 || cropH < 16) return null;
+
+      const canvas = document.createElement('canvas');
+      // 460px width is the sweet spot: crisp characters, ~10KB JPEG, <90ms PaddleOCR inference
+      const outW = Math.min(460, cropW);
+      const outH = Math.max(44, Math.round((cropH / cropW) * outW));
+      canvas.width = outW;
+      canvas.height = outH;
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
+      return canvas;
+    }, [zoomLevel]);
+
+  // Hands-free High-Speed Auto-Scan Loop (every 240ms, instant 1-hit lock-in)
   useEffect(() => {
     if (!isOpen || !cameraReady || !autoScanEnabled || isProcessing) return;
 
@@ -174,60 +219,47 @@ export default function CameraScannerModal({
         return;
       }
 
-      const canvas = cropSerialStripFromVideo();
+      const canvas = cropExactReticleFromVideo();
       if (!canvas) return;
 
       const sharpness = Math.round(computeCanvasSharpness(canvas));
       setSharpnessScore(sharpness);
 
-      // Threshold 11+ indicates clear character edges inside the reticle
-      if (sharpness < 11) {
-        setLiveStatusText('Giữ cố định tờ tiền cho đủ nét...');
+      // Threshold 8+ allows scanning as soon as text enters the reticle
+      if (sharpness < 8) {
+        setLiveStatusText('Đưa dãy số seri vào giữa khung xanh...');
         return;
       }
 
       isScanningFrameRef.current = true;
-      setLiveStatusText('Khung hình đã nét — Đang tự động đọc số seri...');
+      setLiveStatusText('Đang đọc số seri bằng AI (PaddleOCR)...');
 
       try {
         const result = await recognizeSerialFromCanvas(canvas);
         if (completedRef.current) return;
 
+        // Instant 1-hit lock-in as soon as a valid 10-character TWD serial (2L + 6D + 2L) is recognized!
         if (result.isExactTwdFormat && result.serialNumber.length === 10) {
+          completedRef.current = true;
           setLiveDetectedCandidate(result.serialNumber);
 
-          // Confirm immediately if high confidence (>= 70%) or matched 2 times in a row
           if (
-            result.confidence >= 70 ||
-            lastCandidateRef.current === result.serialNumber
+            typeof navigator !== 'undefined' &&
+            typeof navigator.vibrate === 'function'
           ) {
-            completedRef.current = true;
-            if (
-              typeof navigator !== 'undefined' &&
-              typeof navigator.vibrate === 'function'
-            ) {
-              navigator.vibrate(60);
-            }
-            stopCamera();
-            onScanComplete(result);
-            return;
+            navigator.vibrate(50);
           }
 
-          lastCandidateRef.current = result.serialNumber;
-          setLiveStatusText(
-            `Đang xác nhận số seri: ${result.serialNumber}...`
-          );
-        } else if (result.serialNumber.length >= 6) {
-          setLiveStatusText(
-            'Đưa sát dãy 10 ký tự (VD: TY328954HR) vào chính giữa khung...'
-          );
+          stopCamera();
+          onScanComplete(result);
+          return;
         }
       } catch {
-        // Ignore busy frame
+        // Ignore frame error
       } finally {
         isScanningFrameRef.current = false;
       }
-    }, 420);
+    }, 240);
 
     return () => clearInterval(interval);
   }, [
@@ -235,7 +267,7 @@ export default function CameraScannerModal({
     cameraReady,
     autoScanEnabled,
     isProcessing,
-    cropSerialStripFromVideo,
+    cropExactReticleFromVideo,
     stopCamera,
     onScanComplete,
   ]);
@@ -243,23 +275,22 @@ export default function CameraScannerModal({
   // Manual capture fallback button
   const handleManualCapture = async () => {
     if (!cameraReady || isProcessing) return;
-    const canvas = cropSerialStripFromVideo();
+    const canvas = cropExactReticleFromVideo();
     if (!canvas) return;
 
     completedRef.current = true;
     setIsProcessing(true);
-    setOcrProgress(15);
+    setOcrProgress(20);
 
     try {
-      // Wait briefly if a background auto-scan frame is finishing
       let retries = 0;
-      while (isScanningFrameRef.current && retries < 10) {
-        await new Promise((r) => setTimeout(r, 80));
+      while (isScanningFrameRef.current && retries < 12) {
+        await new Promise((r) => setTimeout(r, 60));
         retries++;
       }
 
       const result = await recognizeSerialFromCanvas(canvas, (pct) => {
-        setOcrProgress(Math.max(15, pct));
+        setOcrProgress(Math.max(20, pct));
       });
 
       stopCamera();
@@ -277,7 +308,7 @@ export default function CameraScannerModal({
 
     completedRef.current = true;
     setIsProcessing(true);
-    setOcrProgress(10);
+    setOcrProgress(15);
     setCameraError(null);
 
     try {
@@ -291,7 +322,7 @@ export default function CameraScannerModal({
       });
 
       const canvas = document.createElement('canvas');
-      const maxDim = 1200;
+      const maxDim = 1000;
       const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
       canvas.width = Math.max(1, Math.floor(img.width * scale));
       canvas.height = Math.max(1, Math.floor(img.height * scale));
@@ -302,7 +333,7 @@ export default function CameraScannerModal({
       URL.revokeObjectURL(imageUrl);
 
       const result = await recognizeSerialFromCanvas(canvas, (pct) => {
-        setOcrProgress(Math.max(15, pct));
+        setOcrProgress(Math.max(20, pct));
       });
 
       stopCamera();
@@ -322,20 +353,46 @@ export default function CameraScannerModal({
 
   if (!isOpen) return null;
 
-  const isSharp = sharpnessScore >= 11;
+  const isSharp = sharpnessScore >= 8;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-950/95 backdrop-blur-md">
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/80">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80">
         <div className="flex items-center gap-2">
           <Camera className="w-5 h-5 text-emerald-400" />
-          <h2 className="text-base font-semibold text-white">
-            Quét tự động số seri TWD
+          <h2 className="text-sm sm:text-base font-semibold text-white">
+            Quét AI Số Seri (PaddleOCR)
           </h2>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {/* 1x / 1.6x Macro Focus Zoom Toggle */}
+          <button
+            type="button"
+            onClick={() => setZoomLevel((z) => (z === 1 ? 1.6 : 1))}
+            className="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-slate-800 border border-slate-700 text-emerald-300 flex items-center gap-1"
+            title="Phóng to 1.6x để giữ điện thoại cách tờ tiền 15-20cm giúp camera iPhone lấy nét căng nhất"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+            <span>{zoomLevel}x</span>
+          </button>
+
+          {/* Flashlight / Torch Toggle */}
+          <button
+            type="button"
+            onClick={toggleTorch}
+            className={`p-1.5 rounded-full border transition ${
+              torchOn
+                ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                : 'bg-slate-800 border-slate-700 text-slate-400'
+            }`}
+            title="Bật đèn Flash chiếu sáng tờ tiền"
+          >
+            <Flashlight className="w-4 h-4" />
+          </button>
+
+          {/* Auto-Scan Toggle */}
           <button
             type="button"
             onClick={() => setAutoScanEnabled((v) => !v)}
@@ -346,14 +403,14 @@ export default function CameraScannerModal({
             }`}
           >
             <Zap className="w-3.5 h-3.5" />
-            <span>Tự động: {autoScanEnabled ? 'BẬT' : 'TẮT'}</span>
+            <span>{autoScanEnabled ? 'Tự động' : 'Thủ công'}</span>
           </button>
 
           <button
             type="button"
             onClick={onClose}
             disabled={isProcessing}
-            className="p-2 rounded-full bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 transition"
+            className="p-1.5 rounded-full bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 transition"
             aria-label="Đóng"
           >
             <X className="w-5 h-5" />
@@ -368,20 +425,25 @@ export default function CameraScannerModal({
           playsInline
           muted
           autoPlay
-          className={`w-full h-full object-cover transition-opacity duration-300 ${
+          style={{
+            transform: zoomLevel > 1 ? `scale(${zoomLevel})` : undefined,
+            transformOrigin: 'center center',
+          }}
+          className={`w-full h-full object-cover transition-opacity duration-200 ${
             cameraReady ? 'opacity-100' : 'opacity-20'
           }`}
         />
 
-        {/* Sleek Single-Line Serial Number Aiming Reticle */}
+        {/* Exact-Mapped Single-Line Serial Number Aiming Reticle */}
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center p-6">
           <div
-            className={`w-full max-w-sm h-20 rounded-2xl border-2 transition-colors duration-200 shadow-[0_0_0_9999px_rgba(2,6,23,0.68)] relative flex items-center justify-center ${
+            ref={reticleRef}
+            className={`w-full max-w-[330px] h-[72px] rounded-2xl border-2 transition-colors duration-150 shadow-[0_0_0_9999px_rgba(2,6,23,0.72)] relative flex items-center justify-center ${
               liveDetectedCandidate
-                ? 'border-emerald-400 bg-emerald-500/10'
+                ? 'border-emerald-400 bg-emerald-500/15'
                 : isSharp
-                ? 'border-emerald-400/90'
-                : 'border-amber-400/70'
+                ? 'border-emerald-400'
+                : 'border-amber-400/75'
             }`}
           >
             {/* Corner brackets */}
@@ -402,7 +464,7 @@ export default function CameraScannerModal({
                   <span>{liveDetectedCandidate}</span>
                 </p>
               ) : (
-                <p className="text-xs font-mono tracking-widest uppercase text-emerald-300/75 bg-slate-950/70 px-3 py-1 rounded-full border border-emerald-500/25">
+                <p className="text-xs font-mono tracking-widest uppercase text-emerald-300/70 bg-slate-950/65 px-3 py-1 rounded-full border border-emerald-500/25">
                   TY 328954 HR
                 </p>
               )}
@@ -410,7 +472,7 @@ export default function CameraScannerModal({
           </div>
 
           {/* Live Sharpness & Auto-Scan Status Pill */}
-          <div className="mt-4 flex flex-col items-center gap-1.5">
+          <div className="mt-4 flex flex-col items-center gap-1">
             <p
               className={`text-xs sm:text-sm font-medium text-center px-4 py-1.5 rounded-full border transition ${
                 isSharp
@@ -420,12 +482,9 @@ export default function CameraScannerModal({
             >
               {liveStatusText}
             </p>
-            {cameraReady && (
-              <span className="text-[11px] text-slate-400 font-mono">
-                Độ nét khung hình: {sharpnessScore}{' '}
-                {isSharp ? '✓ Đủ nét' : '(Đưa gần/giữ chắc tay)'}
-              </span>
-            )}
+            <span className="text-[11px] text-slate-300/90 bg-slate-950/70 px-3 py-0.5 rounded-full">
+              Mẹo: Giữ điện thoại cách tờ tiền 15–20cm để camera iPhone lấy nét nhanh nhất
+            </span>
           </div>
         </div>
 
@@ -454,22 +513,19 @@ export default function CameraScannerModal({
               <Sparkles className="w-7 h-7 text-emerald-400 animate-spin" />
             </div>
             <p className="text-base font-semibold text-white mb-1">
-              Đang xử lý số seri (OCR)...
+              Đang đọc số seri bằng AI (PaddleOCR)...
             </p>
-            <p className="text-xs text-slate-400 mb-4">
-              Đang lọc mực đỏ/đen và đọc ký tự ({ocrProgress}%)
-            </p>
-            <div className="w-56 h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div className="w-56 h-2 bg-slate-800 rounded-full overflow-hidden mt-3">
               <div
                 className="h-full bg-emerald-500 transition-all duration-200 rounded-full"
-                style={{ width: `${Math.min(100, Math.max(10, ocrProgress))}%` }}
+                style={{ width: `${Math.min(100, Math.max(15, ocrProgress))}%` }}
               />
             </div>
           </div>
         )}
       </div>
 
-      {/* Bottom Controls (Manual override & File upload fallback) */}
+      {/* Bottom Controls */}
       <div className="px-4 py-4 bg-slate-950 border-t border-slate-800/80 safe-bottom">
         <div className="max-w-md mx-auto flex items-center gap-2.5">
           <button

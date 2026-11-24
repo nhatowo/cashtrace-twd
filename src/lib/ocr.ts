@@ -369,7 +369,7 @@ export async function recognizeSerialFromCanvas(
 
   try {
     if (onProgress) onProgress(20);
-    const previewDataUrl = rawCanvas.toDataURL('image/jpeg', 0.88);
+    const previewDataUrl = rawCanvas.toDataURL('image/jpeg', 0.80);
 
     // Primary Pass: AWS Server PaddleOCR PP-OCRv4 (DBNet + SVTR deep learning engine)
     try {
