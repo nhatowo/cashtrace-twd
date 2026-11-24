@@ -1,4 +1,5 @@
 import { normalizeSerialNumber } from '@/types/banknote';
+import { getApiBaseUrl } from '@/lib/serverSync';
 
 export interface OcrScanResult {
   serialNumber: string;
@@ -6,6 +7,7 @@ export interface OcrScanResult {
   confidence: number;
   previewDataUrl: string;
   isExactTwdFormat: boolean;
+  engine?: string;
 }
 
 const TWD_EXACT_REGEX = /^[A-Z]{2}\d{6}[A-Z]{2}$/;
@@ -368,6 +370,37 @@ export async function recognizeSerialFromCanvas(
   try {
     if (onProgress) onProgress(20);
     const previewDataUrl = rawCanvas.toDataURL('image/jpeg', 0.88);
+
+    // Primary Pass: AWS Server PaddleOCR PP-OCRv4 (DBNet + SVTR deep learning engine)
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4500);
+      const resp = await fetch(`${getApiBaseUrl()}/api/ocr`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: previewDataUrl }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (resp.ok) {
+        const paddleData = await resp.json();
+        if (paddleData && typeof paddleData.serialNumber === 'string' && paddleData.serialNumber.length >= 4) {
+          if (onProgress) onProgress(100);
+          return {
+            serialNumber: paddleData.serialNumber,
+            rawText: paddleData.rawText || paddleData.serialNumber,
+            confidence: Number(paddleData.confidence || 92),
+            previewDataUrl,
+            isExactTwdFormat: Boolean(paddleData.isExactTwdFormat),
+            engine: paddleData.engine || 'PaddleOCR-v4',
+          };
+        }
+      }
+    } catch {
+      // Fallback seamlessly to local Tesseract.js if offline
+    }
+
     const worker = await getSharedTesseractWorker();
 
     if (onProgress) onProgress(50);

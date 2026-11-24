@@ -120,7 +120,46 @@ const server = http.createServer(async (req, res) => {
   try {
     // --- API ROUTES ---
     if (pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, server: 'CashTrace Ubuntu Server 18.142.115.74' });
+      return sendJson(res, 200, { ok: true, server: 'CashTrace Ubuntu Server 18.142.115.74', ocr: 'PaddleOCR-v4' });
+    }
+
+    if (pathname === '/api/ocr' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const payloadStr = JSON.stringify({ image: body.image || '' });
+      const ocrRes = await new Promise((resolve, reject) => {
+        const proxyReq = http.request(
+          {
+            hostname: '127.0.0.1',
+            port: 3001,
+            path: '/ocr',
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Content-Length': Buffer.byteLength(payloadStr),
+            },
+            timeout: 8000,
+          },
+          (proxyRes) => {
+            let raw = '';
+            proxyRes.on('data', (chunk) => (raw += chunk));
+            proxyRes.on('end', () => {
+              try {
+                resolve({ status: proxyRes.statusCode || 200, data: JSON.parse(raw) });
+              } catch (err) {
+                reject(err);
+              }
+            });
+          }
+        );
+        proxyReq.on('error', reject);
+        proxyReq.on('timeout', () => {
+          proxyReq.destroy();
+          reject(new Error('PaddleOCR timeout'));
+        });
+        proxyReq.write(payloadStr);
+        proxyReq.end();
+      });
+      return sendJson(res, ocrRes.status, ocrRes.data);
     }
 
     if (pathname === '/api/auth/register' && req.method === 'POST') {
