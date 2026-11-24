@@ -16,6 +16,9 @@ import {
   Sparkles,
   Download,
   Trash2,
+  Eye,
+  Clock,
+  FileText,
 } from 'lucide-react';
 import {
   Banknote,
@@ -24,6 +27,7 @@ import {
   DENOMINATION_STYLES,
   SUPPORTED_DENOMINATIONS,
   formatTWD,
+  formatDateTimeVN,
   normalizeSerialNumber,
 } from '@/types/banknote';
 import { getSupabaseClient } from '@/lib/supabase';
@@ -55,9 +59,15 @@ export default function CashTracePage() {
   const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
   const [serialInput, setSerialInput] = useState<string>('');
   const [selectedDenom, setSelectedDenom] = useState<Denomination>(1000);
+  const [noteInput, setNoteInput] = useState<string>('');
   const [ocrResult, setOcrResult] = useState<OcrScanResult | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  // Image Viewer Modal state
+  const [viewingNoteImage, setViewingNoteImage] = useState<Banknote | null>(
+    null
+  );
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -102,7 +112,7 @@ export default function CashTracePage() {
     }
   }, []);
 
-  // Fetch banknotes from Supabase (if configured) OR Ubuntu Server 180.93.118.185
+  // Fetch banknotes from Supabase (if configured) OR AWS Server 18.142.115.74
   const fetchBanknotes = useCallback(async () => {
     setSyncing(true);
     const supabase = getSupabaseClient();
@@ -132,11 +142,10 @@ export default function CashTracePage() {
           return;
         }
       } catch {
-        // Fall through to Ubuntu server sync
+        // Fall through to AWS server sync
       }
     }
 
-    // Default: Sync with Ubuntu Server 180.93.118.185
     try {
       const { banknotes: remoteNotes, userEmail: srvEmail } =
         await serverFetchBanknotes();
@@ -155,7 +164,7 @@ export default function CashTracePage() {
     }
   }, [loadLocalBanknotes, saveLocalBanknotes]);
 
-  // Initial load + periodic 5s sync across mobile & desktop
+  // Initial load + periodic 6s sync across mobile & desktop
   useEffect(() => {
     fetchBanknotes();
 
@@ -208,17 +217,21 @@ export default function CashTracePage() {
     return { totalHeldTWD: total, heldCount: held, spentCount: spent };
   }, [banknotes]);
 
-  // Filter & Search by serial number (Features 6 & 9)
+  // Filter & Search by serial number (or note)
   const filteredBanknotes = useMemo(() => {
     const query = normalizeSerialNumber(searchQuery);
+    const rawQueryLower = searchQuery.trim().toLowerCase();
     return banknotes.filter((note) => {
       if (statusFilter !== 'ALL' && note.status !== statusFilter) {
         return false;
       }
-      if (query && !normalizeSerialNumber(note.serial_number).includes(query)) {
-        return false;
-      }
-      return true;
+      if (!rawQueryLower) return true;
+      const serialMatch =
+        query.length > 0 &&
+        normalizeSerialNumber(note.serial_number).includes(query);
+      const noteMatch =
+        note.note && note.note.toLowerCase().includes(rawQueryLower);
+      return Boolean(serialMatch || noteMatch);
     });
   }, [banknotes, searchQuery, statusFilter]);
 
@@ -231,11 +244,10 @@ export default function CashTracePage() {
 
     setTimeout(() => {
       serialInputRef.current?.focus();
-      serialInputRef.current?.select();
     }, 120);
   };
 
-  // Save banknote with duplicate prevention (Features 3, 4, 5)
+  // Save banknote with scanned image, optional note, and duplicate prevention
   const handleSaveBanknote = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -260,6 +272,9 @@ export default function CashTracePage() {
       return;
     }
 
+    const trimmedNote = noteInput.trim() || null;
+    const scannedImageData = ocrResult?.previewDataUrl || null;
+
     setIsSaving(true);
     const supabase = getSupabaseClient();
 
@@ -272,6 +287,8 @@ export default function CashTracePage() {
             serial_number: cleanedSerial,
             denomination: selectedDenom,
             status: 'HELD',
+            note: trimmedNote,
+            scan_image: scannedImageData,
           })
           .select('*')
           .single();
@@ -293,7 +310,9 @@ export default function CashTracePage() {
         try {
           const created = await serverInsertBanknote(
             cleanedSerial,
-            selectedDenom
+            selectedDenom,
+            trimmedNote,
+            scannedImageData
           );
           const updated = [created, ...banknotes];
           setBanknotes(updated);
@@ -316,6 +335,8 @@ export default function CashTracePage() {
             serial_number: cleanedSerial,
             denomination: selectedDenom,
             status: 'HELD',
+            note: trimmedNote,
+            scan_image: scannedImageData,
             created_at: new Date().toISOString(),
           };
           const updated = [newNote, ...banknotes];
@@ -325,6 +346,7 @@ export default function CashTracePage() {
       }
 
       setSerialInput('');
+      setNoteInput('');
       setOcrResult(null);
       setFormError(null);
     } catch (err: unknown) {
@@ -338,7 +360,7 @@ export default function CashTracePage() {
     }
   };
 
-  // Update banknote status: Mark as SPENT with one tap or UNDO back to HELD (Features 7 & 8)
+  // Update banknote status: Mark as SPENT with one tap or UNDO back to HELD
   const updateBanknoteStatus = async (
     note: Banknote,
     nextStatus: BanknoteStatus,
@@ -366,7 +388,12 @@ export default function CashTracePage() {
     }
 
     const supabase = getSupabaseClient();
-    if (supabase && userId && userId !== 'server_sync' && note.user_id !== 'local') {
+    if (
+      supabase &&
+      userId &&
+      userId !== 'server_sync' &&
+      note.user_id !== 'local'
+    ) {
       const { error } = await supabase
         .from('banknotes')
         .update({ status: nextStatus })
@@ -396,6 +423,9 @@ export default function CashTracePage() {
 
     if (undoToast?.banknote.id === note.id) {
       setUndoToast(null);
+    }
+    if (viewingNoteImage?.id === note.id) {
+      setViewingNoteImage(null);
     }
 
     const supabase = getSupabaseClient();
@@ -503,7 +533,7 @@ export default function CashTracePage() {
           </div>
         </section>
 
-        {/* Large Scan Button + Quick Entry / OCR Correction Card (Features 1, 2, 3, 4, 5) */}
+        {/* Large Scan Button + Quick Entry / OCR Correction Card */}
         <section className="rounded-2xl bg-slate-900/90 border border-slate-800 p-4 space-y-4 shadow-lg">
           {/* Large Prominent Camera Scan CTA */}
           <button
@@ -515,19 +545,19 @@ export default function CashTracePage() {
             <span>Quét Số Seri Bằng Camera</span>
           </button>
 
-          {/* OCR Scan Preview & Correction Notice (Feature 2) */}
+          {/* OCR Scan Preview & Correction Notice */}
           {ocrResult && (
             <div className="p-3 rounded-xl bg-slate-950/90 border border-emerald-500/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
                   <Sparkles className="w-3.5 h-3.5" />
-                  Kết quả OCR (Độ tin cậy: {ocrResult.confidence}%) — Bạn có thể sửa lại nếu sai:
+                  Ảnh đã quét (Độ tin cậy: {ocrResult.confidence}%) — Sẽ tự động lưu kèm tờ tiền:
                 </span>
                 <button
                   type="button"
                   onClick={() => setOcrResult(null)}
                   className="text-slate-400 hover:text-white p-0.5"
-                  aria-label="Ẩn ảnh quét"
+                  aria-label="Xóa ảnh quét"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -537,13 +567,13 @@ export default function CashTracePage() {
                 <img
                   src={ocrResult.previewDataUrl}
                   alt="Ảnh vùng số seri đã quét"
-                  className="w-full max-h-20 object-contain rounded-lg border border-slate-800 bg-black"
+                  className="w-full max-h-24 object-contain rounded-lg border border-slate-800 bg-black"
                 />
               )}
             </div>
           )}
 
-          {/* Form to Edit Serial Number & Select Denomination */}
+          {/* Form to Edit Serial Number, Select Denomination, and Add Optional Note */}
           <form onSubmit={handleSaveBanknote} className="space-y-3.5">
             <div>
               <label
@@ -562,7 +592,7 @@ export default function CashTracePage() {
                     setSerialInput(e.target.value.toUpperCase());
                     if (formError) setFormError(null);
                   }}
-                  placeholder="VD: AA123456BB"
+                  placeholder="VD: TY328954HR"
                   autoCapitalize="characters"
                   autoComplete="off"
                   spellCheck={false}
@@ -585,7 +615,7 @@ export default function CashTracePage() {
               </div>
             </div>
 
-            {/* Select Denomination from 4 options ONLY: 100, 500, 1000, 2000 TWD (Feature 3) */}
+            {/* Select Denomination from 4 options ONLY: 100, 500, 1000, 2000 TWD */}
             <div>
               <span className="block text-xs font-medium text-slate-300 mb-1.5">
                 Chọn mệnh giá (TWD)
@@ -612,6 +642,37 @@ export default function CashTracePage() {
               </div>
             </div>
 
+            {/* Optional Note Field */}
+            <div>
+              <label
+                htmlFor="note-input"
+                className="block text-xs font-medium text-slate-300 mb-1.5"
+              >
+                Ghi chú (tuỳ chọn)
+              </label>
+              <div className="relative">
+                <input
+                  id="note-input"
+                  type="text"
+                  value={noteInput}
+                  onChange={(e) => setNoteInput(e.target.value)}
+                  placeholder="VD: Tiền rút cây ATM, Tiền bạn gửi..."
+                  maxLength={200}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700/90 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500"
+                />
+                {noteInput && (
+                  <button
+                    type="button"
+                    onClick={() => setNoteInput('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-white"
+                    aria-label="Xóa ghi chú"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Error Alert (e.g. duplicate serial number) */}
             {formError && (
               <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-500/40 text-rose-200 text-xs flex items-center gap-2">
@@ -620,7 +681,7 @@ export default function CashTracePage() {
               </div>
             )}
 
-            {/* Save Button (Feature 4) */}
+            {/* Save Button */}
             <button
               type="submit"
               disabled={isSaving || !serialInput.trim()}
@@ -636,7 +697,7 @@ export default function CashTracePage() {
           </form>
         </section>
 
-        {/* Search & Status Filter Section (Features 6 & 9) */}
+        {/* Search & Status Filter Section */}
         <section className="space-y-3">
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -644,8 +705,8 @@ export default function CashTracePage() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Tìm kiếm theo số seri..."
-              className="w-full pl-10 pr-9 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono uppercase"
+              placeholder="Tìm kiếm theo số seri hoặc ghi chú..."
+              className="w-full pl-10 pr-9 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
             />
             {searchQuery && (
               <button
@@ -697,7 +758,7 @@ export default function CashTracePage() {
           </div>
         </section>
 
-        {/* Banknotes List (Features 6, 7, 8) */}
+        {/* Banknotes List */}
         <section className="space-y-2.5">
           {loading ? (
             <div className="py-12 text-center text-sm text-slate-400">
@@ -708,7 +769,7 @@ export default function CashTracePage() {
               <BanknoteIcon className="w-8 h-8 text-slate-600 mx-auto" />
               <p className="text-sm font-medium text-slate-300">
                 {searchQuery
-                  ? 'Không tìm thấy tờ tiền nào khớp số seri này'
+                  ? 'Không tìm thấy tờ tiền nào khớp từ khóa này'
                   : 'Chưa có tờ tiền nào được lưu'}
               </p>
               <p className="text-xs text-slate-500">
@@ -721,75 +782,108 @@ export default function CashTracePage() {
                 DENOMINATION_STYLES[note.denomination] ||
                 DENOMINATION_STYLES[100];
               const isHeld = note.status === 'HELD';
+              const timeStr = formatDateTimeVN(note.created_at);
 
               return (
                 <div
                   key={note.id}
-                  className={`rounded-2xl border p-3.5 flex items-center justify-between gap-3 transition ${
+                  className={`rounded-2xl border p-3.5 flex flex-col gap-2.5 transition ${
                     isHeld
                       ? 'bg-slate-900/90 border-slate-800'
                       : 'bg-slate-900/40 border-slate-800/50 opacity-75'
                   }`}
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span
-                        className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold border ${denomStyle.badgeBg} ${denomStyle.badgeText} ${denomStyle.border}`}
-                      >
-                        {note.denomination} TWD
-                      </span>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className={`px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold border ${denomStyle.badgeBg} ${denomStyle.badgeText} ${denomStyle.border}`}
+                        >
+                          {note.denomination} TWD
+                        </span>
 
-                      <span
-                        className={`px-2 py-0.5 rounded-md text-[11px] font-semibold ${
-                          isHeld
-                            ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        <span
+                          className={`px-2 py-0.5 rounded-md text-[11px] font-semibold ${
+                            isHeld
+                              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                              : 'bg-slate-800 text-slate-400 border border-slate-700'
+                          }`}
+                        >
+                          {isHeld ? 'ĐANG GIỮ' : 'ĐÃ TIÊU'}
+                        </span>
+
+                        {timeStr && (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
+                            <Clock className="w-3 h-3 text-slate-500" />
+                            <span>{timeStr}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <p
+                        className={`mt-1.5 font-mono text-base font-bold tracking-wider truncate ${
+                          isHeld ? 'text-white' : 'text-slate-400 line-through'
                         }`}
                       >
-                        {isHeld ? 'ĐANG GIỮ' : 'ĐÃ TIÊU'}
-                      </span>
+                        {note.serial_number}
+                      </p>
+
+                      {note.note && (
+                        <p className="mt-1 text-xs text-slate-300 flex items-start gap-1.5 break-words">
+                          <FileText className="w-3.5 h-3.5 text-emerald-400/80 shrink-0 mt-0.5" />
+                          <span>{note.note}</span>
+                        </p>
+                      )}
                     </div>
 
-                    <p
-                      className={`mt-1.5 font-mono text-base font-bold tracking-wider truncate ${
-                        isHeld ? 'text-white' : 'text-slate-400 line-through'
-                      }`}
-                    >
-                      {note.serial_number}
-                    </p>
-                  </div>
+                    {/* Action Buttons: View Image (if exists), Spent/Undo, Permanent Delete */}
+                    <div className="shrink-0 flex items-center gap-1.5">
+                      {note.scan_image && (
+                        <button
+                          type="button"
+                          onClick={() => setViewingNoteImage(note)}
+                          title="Xem lại ảnh thực tế lúc quét"
+                          className="py-2.5 px-2.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 active:scale-95 border border-sky-500/30 text-sky-300 text-xs font-semibold flex items-center gap-1 transition"
+                        >
+                          <Eye className="w-4 h-4" />
+                          <span className="hidden sm:inline">Xem ảnh</span>
+                        </button>
+                      )}
 
-                  {/* One-tap Mark as SPENT / UNDO + Permanent Delete */}
-                  <div className="shrink-0 flex items-center gap-1.5">
-                    {isHeld ? (
+                      {isHeld ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateBanknoteStatus(note, 'SPENT', true)
+                          }
+                          className="py-2.5 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 active:scale-95 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-1.5 transition"
+                        >
+                          <Check className="w-4 h-4" />
+                          <span>Đã tiêu</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateBanknoteStatus(note, 'HELD', false)
+                          }
+                          className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Hoàn tác</span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
-                        onClick={() => updateBanknoteStatus(note, 'SPENT', true)}
-                        className="py-2.5 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 active:scale-95 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-1.5 transition"
+                        onClick={() => deleteBanknotePermanently(note)}
+                        title="Xóa hẳn tờ tiền này (có thể thêm lại số seri này sau)"
+                        aria-label="Xóa hẳn tờ tiền"
+                        className="p-2.5 rounded-xl bg-slate-800/80 hover:bg-rose-950/80 active:scale-95 border border-slate-700/80 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 transition"
                       >
-                        <Check className="w-4 h-4" />
-                        <span>Đã tiêu</span>
+                        <Trash2 className="w-4 h-4" />
                       </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => updateBanknoteStatus(note, 'HELD', false)}
-                        className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Hoàn tác</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => deleteBanknotePermanently(note)}
-                      title="Xóa hẳn tờ tiền này (có thể thêm lại số seri này sau)"
-                      aria-label="Xóa hẳn tờ tiền"
-                      className="p-2.5 rounded-xl bg-slate-800/80 hover:bg-rose-950/80 active:scale-95 border border-slate-700/80 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 transition"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -798,7 +892,80 @@ export default function CashTracePage() {
         </section>
       </main>
 
-      {/* Floating Undo Toast Banner (Feature 8) */}
+      {/* View Scanned Image Lightbox Modal */}
+      {viewingNoteImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-sm"
+          onClick={() => setViewingNoteImage(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>Ảnh quét thực tế:</span>
+                  <span className="font-mono text-emerald-400">
+                    {viewingNoteImage.serial_number}
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Mệnh giá: {viewingNoteImage.denomination} TWD • Thêm lúc:{' '}
+                  {formatDateTimeVN(viewingNoteImage.created_at)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingNoteImage(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                aria-label="Đóng"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              {viewingNoteImage.scan_image ? (
+                <div className="rounded-xl overflow-hidden border border-slate-800 bg-black flex items-center justify-center p-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={viewingNoteImage.scan_image}
+                    alt={`Ảnh số seri ${viewingNoteImage.serial_number}`}
+                    className="w-full max-h-64 object-contain rounded-lg"
+                  />
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 text-center py-6">
+                  Tờ tiền này được nhập thủ công nên không có ảnh quét.
+                </p>
+              )}
+
+              {viewingNoteImage.note && (
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 flex items-start gap-2">
+                  <FileText className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="text-slate-400 font-medium">
+                      Ghi chú:{' '}
+                    </span>
+                    <span>{viewingNoteImage.note}</span>
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setViewingNoteImage(null)}
+                className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Undo Toast Banner */}
       {undoToast && (
         <div className="fixed bottom-20 inset-x-4 z-40 max-w-md mx-auto">
           <div className="rounded-2xl bg-slate-900 border border-emerald-500/40 shadow-2xl px-4 py-3 flex items-center justify-between gap-3">

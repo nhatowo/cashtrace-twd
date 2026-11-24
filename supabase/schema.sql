@@ -13,6 +13,8 @@ create table if not exists public.banknotes (
   serial_number text not null,
   denomination integer not null check (denomination in (100, 500, 1000, 2000)),
   status text not null default 'HELD' check (status in ('HELD', 'SPENT')),
+  note text,
+  scan_image text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
 

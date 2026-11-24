@@ -8,6 +8,8 @@ export interface Banknote {
   serial_number: string;
   denomination: Denomination;
   status: BanknoteStatus;
+  note?: string | null;
+  scan_image?: string | null;
   created_at: string;
   updated_at?: string;
 }
@@ -62,4 +64,21 @@ export function normalizeSerialNumber(raw: string): string {
 
 export function formatTWD(amount: number): string {
   return new Intl.NumberFormat('vi-VN').format(amount) + ' TWD';
+}
+
+export function formatDateTimeVN(isoString?: string): string {
+  if (!isoString) return '';
+  try {
+    const date = new Date(isoString);
+    if (isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(date);
+  } catch {
+    return '';
+  }
 }

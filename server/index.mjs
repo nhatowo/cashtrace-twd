@@ -232,6 +232,8 @@ const server = http.createServer(async (req, res) => {
       const serial = normalizeSerial(body.serial_number);
       const denom = Number(body.denomination);
       const status = body.status === 'SPENT' ? 'SPENT' : 'HELD';
+      const noteText = body.note ? String(body.note).trim().slice(0, 300) : '';
+      const scanImage = body.scan_image ? String(body.scan_image) : null;
 
       if (serial.length < 4) {
         return sendJson(res, 400, { error: 'Số seri phải có ít nhất 4 ký tự.' });
@@ -257,6 +259,8 @@ const server = http.createServer(async (req, res) => {
         serial_number: serial,
         denomination: denom,
         status,
+        note: noteText || null,
+        scan_image: scanImage,
         created_at: now,
         updated_at: now,
       };

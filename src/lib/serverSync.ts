@@ -74,7 +74,9 @@ export async function serverFetchBanknotes(): Promise<{
 
 export async function serverInsertBanknote(
   serial_number: string,
-  denomination: Denomination
+  denomination: Denomination,
+  note?: string | null,
+  scan_image?: string | null
 ): Promise<Banknote> {
   const res = await fetch(`${getApiBaseUrl()}/api/banknotes`, {
     method: 'POST',
@@ -83,6 +85,8 @@ export async function serverInsertBanknote(
       serial_number,
       denomination,
       status: 'HELD',
+      note: note || null,
+      scan_image: scan_image || null,
     }),
   });
   const data = await res.json();
