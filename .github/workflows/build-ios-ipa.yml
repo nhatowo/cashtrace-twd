@@ -8,7 +8,7 @@ on:
 jobs:
   build-ipa:
     name: Build CashTrace iOS IPA on macOS
-    runs-on: macos-14
+    runs-on: macos-latest
 
     steps:
       - name: Checkout repository
