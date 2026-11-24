@@ -14,6 +14,7 @@ import {
   AlertCircle,
   Banknote as BanknoteIcon,
   Sparkles,
+  Download,
 } from 'lucide-react';
 import {
   Banknote,
@@ -25,6 +26,11 @@ import {
   normalizeSerialNumber,
 } from '@/types/banknote';
 import { getSupabaseClient } from '@/lib/supabase';
+import {
+  serverFetchBanknotes,
+  serverInsertBanknote,
+  serverUpdateBanknoteStatus,
+} from '@/lib/serverSync';
 import { OcrScanResult } from '@/lib/ocr';
 import CameraScannerModal from '@/components/CameraScannerModal';
 import AuthModal from '@/components/AuthModal';
@@ -36,6 +42,7 @@ export default function CashTracePage() {
   const [banknotes, setBanknotes] = useState<Banknote[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
+  const [serverOnline, setServerOnline] = useState<boolean>(false);
 
   // Auth & Cloud Sync state
   const [userId, setUserId] = useState<string | null>(null);
@@ -67,12 +74,11 @@ export default function CashTracePage() {
   useEffect(() => {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {
-        // Ignore SW errors in dev mode
+        // Ignore SW errors
       });
     }
   }, []);
 
-  // Load local backup cache
   const loadLocalBanknotes = useCallback((): Banknote[] => {
     if (typeof window === 'undefined') return [];
     try {
@@ -94,94 +100,71 @@ export default function CashTracePage() {
     }
   }, []);
 
-  // Fetch banknotes from Supabase (or local fallback if not signed in)
+  // Fetch banknotes from Supabase (if configured) OR Ubuntu Server 180.93.118.185
   const fetchBanknotes = useCallback(async () => {
     setSyncing(true);
     const supabase = getSupabaseClient();
 
-    if (!supabase) {
-      const localItems = loadLocalBanknotes();
-      setBanknotes(localItems);
-      setUserId(null);
-      setUserEmail(null);
-      setLoading(false);
-      setSyncing(false);
-      return;
+    if (supabase) {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (session?.user) {
+          setUserId(session.user.id);
+          setUserEmail(session.user.email || 'Đã đăng nhập Supabase');
+
+          const { data, error } = await supabase
+            .from('banknotes')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+          if (error) throw error;
+          const remoteList = (data || []) as Banknote[];
+          setBanknotes(remoteList);
+          saveLocalBanknotes(remoteList);
+          setServerOnline(true);
+          setLoading(false);
+          setSyncing(false);
+          return;
+        }
+      } catch {
+        // Fall through to Ubuntu server sync
+      }
     }
 
+    // Default: Sync with Ubuntu Server 180.93.118.185
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.user) {
-        setUserId(null);
-        setUserEmail(null);
-        const localItems = loadLocalBanknotes();
-        setBanknotes(localItems);
-        setLoading(false);
-        setSyncing(false);
-        return;
-      }
-
-      setUserId(session.user.id);
-      setUserEmail(session.user.email || 'Đã đăng nhập');
-
-      const { data, error } = await supabase
-        .from('banknotes')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      const remoteList = (data || []) as Banknote[];
-
-      // Merge any offline local items created before sign-in
-      const localItems = loadLocalBanknotes().filter(
-        (item) => item.user_id === 'local'
-      );
-      if (localItems.length > 0) {
-        const existingSerials = new Set(
-          remoteList.map((b) => normalizeSerialNumber(b.serial_number))
-        );
-        const toUpload = localItems.filter(
-          (b) => !existingSerials.has(normalizeSerialNumber(b.serial_number))
-        );
-
-        if (toUpload.length > 0) {
-          const payload = toUpload.map((b) => ({
-            user_id: session.user.id,
-            serial_number: normalizeSerialNumber(b.serial_number),
-            denomination: b.denomination,
-            status: b.status,
-          }));
-          const { data: inserted } = await supabase
-            .from('banknotes')
-            .insert(payload)
-            .select('*');
-          if (inserted) {
-            remoteList.unshift(...(inserted as Banknote[]));
-          }
-        }
-      }
-
-      setBanknotes(remoteList);
-      saveLocalBanknotes(remoteList);
+      const { banknotes: remoteNotes, userEmail: srvEmail } =
+        await serverFetchBanknotes();
+      setBanknotes(remoteNotes);
+      saveLocalBanknotes(remoteNotes);
+      setUserId('server_sync');
+      setUserEmail(srvEmail);
+      setServerOnline(true);
     } catch {
       const localItems = loadLocalBanknotes();
       setBanknotes(localItems);
+      setServerOnline(false);
     } finally {
       setLoading(false);
       setSyncing(false);
     }
   }, [loadLocalBanknotes, saveLocalBanknotes]);
 
-  // Initial load + Supabase Auth listener + Realtime subscription for Mobile <-> Desktop sync
+  // Initial load + periodic 5s sync across mobile & desktop
   useEffect(() => {
     fetchBanknotes();
 
+    const interval = setInterval(() => {
+      fetchBanknotes();
+    }, 6000);
+
     const supabase = getSupabaseClient();
-    if (!supabase) return;
+    if (!supabase) {
+      return () => clearInterval(interval);
+    }
 
     const {
       data: { subscription: authSub },
@@ -201,6 +184,7 @@ export default function CashTracePage() {
       .subscribe();
 
     return () => {
+      clearInterval(interval);
       authSub.unsubscribe();
       supabase.removeChannel(channel);
     };
@@ -243,7 +227,6 @@ export default function CashTracePage() {
     setSerialInput(result.serialNumber);
     setFormError(null);
 
-    // Focus input so user can inspect and correct OCR mistakes immediately
     setTimeout(() => {
       serialInputRef.current?.focus();
       serialInputRef.current?.select();
@@ -279,7 +262,7 @@ export default function CashTracePage() {
     const supabase = getSupabaseClient();
 
     try {
-      if (supabase && userId) {
+      if (supabase && userId && userId !== 'server_sync') {
         const { data, error } = await supabase
           .from('banknotes')
           .insert({
@@ -305,24 +288,40 @@ export default function CashTracePage() {
         setBanknotes(updated);
         saveLocalBanknotes(updated);
       } else {
-        // Local storage persistence (auto-syncs when user signs in to Supabase)
-        const newNote: Banknote = {
-          id:
-            typeof crypto !== 'undefined' && crypto.randomUUID
-              ? crypto.randomUUID()
-              : `note_${Date.now()}`,
-          user_id: 'local',
-          serial_number: cleanedSerial,
-          denomination: selectedDenom,
-          status: 'HELD',
-          created_at: new Date().toISOString(),
-        };
-        const updated = [newNote, ...banknotes];
-        setBanknotes(updated);
-        saveLocalBanknotes(updated);
+        try {
+          const created = await serverInsertBanknote(
+            cleanedSerial,
+            selectedDenom
+          );
+          const updated = [created, ...banknotes];
+          setBanknotes(updated);
+          saveLocalBanknotes(updated);
+          setServerOnline(true);
+        } catch (srvErr: unknown) {
+          const errWithCode = srvErr as Error & { code?: string };
+          if (errWithCode?.code === '23505') {
+            setFormError(`Số seri "${cleanedSerial}" đã tồn tại trên hệ thống!`);
+            setIsSaving(false);
+            return;
+          }
+          // Offline fallback
+          const newNote: Banknote = {
+            id:
+              typeof crypto !== 'undefined' && crypto.randomUUID
+                ? crypto.randomUUID()
+                : `note_${Date.now()}`,
+            user_id: 'local',
+            serial_number: cleanedSerial,
+            denomination: selectedDenom,
+            status: 'HELD',
+            created_at: new Date().toISOString(),
+          };
+          const updated = [newNote, ...banknotes];
+          setBanknotes(updated);
+          saveLocalBanknotes(updated);
+        }
       }
 
-      // Reset form after save
       setSerialInput('');
       setOcrResult(null);
       setFormError(null);
@@ -346,7 +345,6 @@ export default function CashTracePage() {
     const previousStatus = note.status;
     if (previousStatus === nextStatus) return;
 
-    // Optimistic UI update for instant one-tap response
     const optimistic = banknotes.map((item) =>
       item.id === note.id
         ? { ...item, status: nextStatus, updated_at: new Date().toISOString() }
@@ -366,19 +364,24 @@ export default function CashTracePage() {
     }
 
     const supabase = getSupabaseClient();
-    if (supabase && userId && note.user_id !== 'local') {
+    if (supabase && userId && userId !== 'server_sync' && note.user_id !== 'local') {
       const { error } = await supabase
         .from('banknotes')
         .update({ status: nextStatus })
         .eq('id', note.id);
 
       if (error) {
-        // Revert on error
         const reverted = banknotes.map((item) =>
           item.id === note.id ? { ...item, status: previousStatus } : item
         );
         setBanknotes(reverted);
         saveLocalBanknotes(reverted);
+      }
+    } else if (note.user_id !== 'local') {
+      try {
+        await serverUpdateBanknoteStatus(note.id, nextStatus);
+      } catch {
+        // Keep optimistic state locally
       }
     }
   };
@@ -387,22 +390,33 @@ export default function CashTracePage() {
     <div className="min-h-screen flex flex-col bg-[#090d16] text-slate-100 pb-28 safe-top">
       {/* Top Header */}
       <header className="sticky top-0 z-30 bg-[#090d16]/90 backdrop-blur-md border-b border-slate-800/80">
-        <div className="max-w-xl mx-auto px-4 py-3.5 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-mono font-bold text-sm">
+        <div className="max-w-xl mx-auto px-4 py-3.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-mono font-bold text-sm shrink-0">
               NT$
             </div>
-            <div>
+            <div className="truncate">
               <h1 className="text-base font-bold tracking-tight text-white leading-none">
                 CashTrace
               </h1>
-              <p className="text-[11px] text-slate-400 mt-0.5">
+              <p className="text-[11px] text-slate-400 mt-0.5 truncate">
                 Theo dõi Tiền Đài Loan (TWD)
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
+            <a
+              href="/CashTrace-Signed.ipa"
+              download
+              className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-emerald-500/40 text-xs font-medium text-emerald-300 flex items-center gap-1 transition"
+              title="Tải file CashTrace-Signed.ipa cho iOS"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Tải IPA iOS</span>
+              <span className="sm:hidden">IPA</span>
+            </a>
+
             <button
               type="button"
               onClick={fetchBanknotes}
@@ -419,13 +433,13 @@ export default function CashTracePage() {
             <button
               type="button"
               onClick={() => setIsAuthModalOpen(true)}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition ${
-                userId
+              className={`px-2.5 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition ${
+                serverOnline
                   ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
                   : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
               }`}
             >
-              {userId ? (
+              {serverOnline ? (
                 <>
                   <Cloud className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Đã đồng bộ</span>
@@ -792,7 +806,7 @@ export default function CashTracePage() {
         onScanComplete={handleScanComplete}
       />
 
-      {/* Supabase Auth & Cloud Sync Configuration Modal */}
+      {/* Server & Supabase Auth Configuration Modal */}
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}

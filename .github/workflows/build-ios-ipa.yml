@@ -39,7 +39,7 @@ jobs:
             pod install
           fi
 
-      - name: Configure iOS Camera & Photo Permissions in Info.plist
+      - name: Configure iOS Camera, Photo & HTTP Server Sync Permissions in Info.plist
         run: |
           PLIST="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'CashTrace cần quyền truy cập Camera để quét số seri tờ tiền Đài Loan (TWD).'" "$PLIST" || \
@@ -50,6 +50,10 @@ jobs:
 
           /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryAddUsageDescription string 'CashTrace cần quyền lưu ảnh.'" "$PLIST" || \
           /usr/libexec/PlistBuddy -c "Set :NSPhotoLibraryAddUsageDescription 'CashTrace cần quyền lưu ảnh.'" "$PLIST"
+
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST" || \
+          /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoads true" "$PLIST"
 
       - name: Build Unsigned iOS App via Xcode Workspace
         run: |
