@@ -14,10 +14,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install dependencies
         run: npm install
@@ -34,6 +34,10 @@ jobs:
             npx cap add ios
           fi
           npx cap sync ios
+          cd ios/App
+          if [ -f "Podfile" ]; then
+            pod install
+          fi
 
       - name: Configure iOS Camera & Photo Permissions in Info.plist
         run: |
@@ -47,19 +51,32 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryAddUsageDescription string 'CashTrace cần quyền lưu ảnh.'" "$PLIST" || \
           /usr/libexec/PlistBuddy -c "Set :NSPhotoLibraryAddUsageDescription 'CashTrace cần quyền lưu ảnh.'" "$PLIST"
 
-      - name: Build Unsigned iOS App via Xcode
+      - name: Build Unsigned iOS App via Xcode Workspace
         run: |
           cd ios/App
-          xcodebuild clean build \
-            -project App.xcodeproj \
-            -scheme App \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            DEVELOPMENT_TEAM=""
+          if [ -d "App.xcworkspace" ]; then
+            xcodebuild clean build \
+              -workspace App.xcworkspace \
+              -scheme App \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath build \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              DEVELOPMENT_TEAM=""
+          else
+            xcodebuild clean build \
+              -project App.xcodeproj \
+              -scheme App \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath build \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              DEVELOPMENT_TEAM=""
+          fi
 
       - name: Package Unsigned .ipa
         run: |
@@ -67,6 +84,7 @@ jobs:
           cp -r ios/App/build/Build/Products/Release-iphoneos/App.app Payload/
           zip -r CashTrace-Unsigned.ipa Payload
           rm -rf Payload
+          ls -lh CashTrace-Unsigned.ipa
 
       - name: Sign .ipa with Certificate (.p12 + .mobileprovision) if Secrets are provided
         env:
