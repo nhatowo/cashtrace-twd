@@ -15,6 +15,7 @@ import {
   Banknote as BanknoteIcon,
   Sparkles,
   Download,
+  Trash2,
 } from 'lucide-react';
 import {
   Banknote,
@@ -30,6 +31,7 @@ import {
   serverFetchBanknotes,
   serverInsertBanknote,
   serverUpdateBanknoteStatus,
+  serverDeleteBanknote,
 } from '@/lib/serverSync';
 import { OcrScanResult } from '@/lib/ocr';
 import CameraScannerModal from '@/components/CameraScannerModal';
@@ -386,6 +388,33 @@ export default function CashTracePage() {
     }
   };
 
+  // Permanently delete a banknote so its serial number can be added again later
+  const deleteBanknotePermanently = async (note: Banknote) => {
+    const updated = banknotes.filter((item) => item.id !== note.id);
+    setBanknotes(updated);
+    saveLocalBanknotes(updated);
+
+    if (undoToast?.banknote.id === note.id) {
+      setUndoToast(null);
+    }
+
+    const supabase = getSupabaseClient();
+    if (
+      supabase &&
+      userId &&
+      userId !== 'server_sync' &&
+      note.user_id !== 'local'
+    ) {
+      await supabase.from('banknotes').delete().eq('id', note.id);
+    } else if (note.user_id !== 'local') {
+      try {
+        await serverDeleteBanknote(note.id);
+      } catch {
+        // Already removed locally
+      }
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-[#090d16] text-slate-100 pb-28 safe-top">
       {/* Top Header */}
@@ -730,26 +759,38 @@ export default function CashTracePage() {
                     </p>
                   </div>
 
-                  {/* One-tap Mark as SPENT or One-tap UNDO (Features 7 & 8) */}
-                  {isHeld ? (
+                  {/* One-tap Mark as SPENT / UNDO + Permanent Delete */}
+                  <div className="shrink-0 flex items-center gap-1.5">
+                    {isHeld ? (
+                      <button
+                        type="button"
+                        onClick={() => updateBanknoteStatus(note, 'SPENT', true)}
+                        className="py-2.5 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 active:scale-95 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-1.5 transition"
+                      >
+                        <Check className="w-4 h-4" />
+                        <span>Đã tiêu</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => updateBanknoteStatus(note, 'HELD', false)}
+                        className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Hoàn tác</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
-                      onClick={() => updateBanknoteStatus(note, 'SPENT', true)}
-                      className="shrink-0 py-2.5 px-3.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 active:scale-95 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-1.5 transition"
+                      onClick={() => deleteBanknotePermanently(note)}
+                      title="Xóa hẳn tờ tiền này (có thể thêm lại số seri này sau)"
+                      aria-label="Xóa hẳn tờ tiền"
+                      className="p-2.5 rounded-xl bg-slate-800/80 hover:bg-rose-950/80 active:scale-95 border border-slate-700/80 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 transition"
                     >
-                      <Check className="w-4 h-4" />
-                      <span>Đã tiêu</span>
+                      <Trash2 className="w-4 h-4" />
                     </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => updateBanknoteStatus(note, 'HELD', false)}
-                      className="shrink-0 py-2.5 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Hoàn tác</span>
-                    </button>
-                  )}
+                  </div>
                 </div>
               );
             })

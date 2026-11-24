@@ -284,6 +284,21 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { banknote: db.banknotes[idx] });
     }
 
+    if (pathname.startsWith('/api/banknotes/') && req.method === 'DELETE') {
+      const id = pathname.replace('/api/banknotes/', '').trim();
+      const db = loadDb();
+      const user = getAuthUser(req, db);
+
+      const idx = db.banknotes.findIndex((b) => b.id === id && b.user_id === user.id);
+      if (idx === -1) {
+        return sendJson(res, 404, { error: 'Không tìm thấy tờ tiền để xóa.' });
+      }
+
+      const [deleted] = db.banknotes.splice(idx, 1);
+      saveDb(db);
+      return sendJson(res, 200, { ok: true, deleted });
+    }
+
     // --- STATIC & IPA FILES ---
     let filePath = path.join(STATIC_DIR, pathname === '/' ? 'index.html' : pathname);
     if (!fs.existsSync(filePath) && fs.existsSync(filePath + '.html')) {

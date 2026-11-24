@@ -112,6 +112,17 @@ export async function serverUpdateBanknoteStatus(
   return data.banknote as Banknote;
 }
 
+export async function serverDeleteBanknote(id: string): Promise<void> {
+  const res = await fetch(`${getApiBaseUrl()}/api/banknotes/${id}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Không thể xóa tờ tiền');
+  }
+}
+
 export async function serverLoginOrRegister(
   mode: 'login' | 'register',
   email: string,
