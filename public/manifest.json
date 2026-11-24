@@ -1,0 +1,19 @@
+{
+  "name": "CashTrace — Quản lý Tiền Đài Loan (TWD)",
+  "short_name": "CashTrace",
+  "description": "Ứng dụng quét số seri và theo dõi tiền mặt Đài Loan (100, 500, 1000, 2000 TWD)",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "orientation": "portrait-primary",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
