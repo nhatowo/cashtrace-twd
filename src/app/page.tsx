@@ -19,6 +19,7 @@ import {
   Eye,
   Clock,
   FileText,
+  ClipboardCheck,
 } from 'lucide-react';
 import {
   Banknote,
@@ -40,6 +41,7 @@ import {
 import { OcrScanResult } from '@/lib/ocr';
 import CameraScannerModal from '@/components/CameraScannerModal';
 import AuthModal from '@/components/AuthModal';
+import AuditCheckModal from '@/components/AuditCheckModal';
 
 const LOCAL_STORAGE_KEY = 'cashtrace_banknotes_v1';
 
@@ -68,6 +70,9 @@ export default function CashTracePage() {
   const [viewingNoteImage, setViewingNoteImage] = useState<Banknote | null>(
     null
   );
+
+  // Cash Audit / Missing Bill Checker Modal state
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState<boolean>(false);
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -516,8 +521,8 @@ export default function CashTracePage() {
 
       {/* Main Content Container */}
       <main className="flex-1 w-full max-w-xl mx-auto px-4 pt-4 space-y-4">
-        {/* Total Money Currently HELD Card (Feature 10) */}
-        <section className="rounded-2xl bg-gradient-to-br from-emerald-950/70 via-slate-900 to-slate-900 border border-emerald-500/30 p-5 shadow-xl">
+        {/* Total Money Currently HELD Card (Feature 10) + Cash Audit Button */}
+        <section className="rounded-2xl bg-gradient-to-br from-emerald-950/70 via-slate-900 to-slate-900 border border-emerald-500/30 p-5 shadow-xl space-y-3.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium uppercase tracking-wider text-emerald-300/90">
               Tổng tiền đang giữ
@@ -526,10 +531,19 @@ export default function CashTracePage() {
               {heldCount} tờ đang giữ • {spentCount} tờ đã tiêu
             </span>
           </div>
-          <div className="mt-2 flex items-baseline gap-2">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <span className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white font-mono">
               {formatTWD(totalHeldTWD)}
             </span>
+
+            <button
+              type="button"
+              onClick={() => setIsAuditModalOpen(true)}
+              className="px-3.5 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 active:scale-95 border border-emerald-400/40 text-emerald-200 text-xs font-bold flex items-center gap-2 shadow-sm transition"
+            >
+              <ClipboardCheck className="w-4 h-4 text-emerald-400" />
+              <span>Kiểm tiền / Đối chiếu ({heldCount} tờ)</span>
+            </button>
           </div>
         </section>
 
@@ -1012,6 +1026,16 @@ export default function CashTracePage() {
         isOpen={isScannerOpen}
         onClose={() => setIsScannerOpen(false)}
         onScanComplete={handleScanComplete}
+      />
+
+      {/* Cash Audit & Missing Bill Checker Modal */}
+      <AuditCheckModal
+        isOpen={isAuditModalOpen}
+        onClose={() => setIsAuditModalOpen(false)}
+        banknotes={banknotes}
+        onMarkSpent={(note) => updateBanknoteStatus(note, 'SPENT', true)}
+        onDeletePermanent={deleteBanknotePermanently}
+        onViewImage={(note) => setViewingNoteImage(note)}
       />
 
       {/* Server & Supabase Auth Configuration Modal */}
